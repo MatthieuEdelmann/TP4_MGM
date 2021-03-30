@@ -1,16 +1,20 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
+#include <QDebug>
 
 /* **** début de la partie à compléter **** */
 void MainWindow::showEdgeSelection(MyMesh* _mesh)
 {
     // on réinitialise les couleurs de tout le maillage
     resetAllColorsAndThickness(_mesh);
+    EdgeHandle eh;
+    MyMesh::Color vert(0, 255, 0);
 
-    /* **** à compléter ! (Partie 1) ****
-     * cette fonction utilise la variables de sélection edgeSelection qui est l'ID de
-     * l'arête sélectionnée et qui est égale à -1 si la sélection est vide
-     */
+    if(edgeSelection > -1 || edgeSelection < _mesh->n_edges()){
+        eh = _mesh->edge_handle(edgeSelection);
+        _mesh->set_color(eh,vert);
+        _mesh->data(eh).thickness = 5;
+    }
 
     // on affiche le nouveau maillage
     displayMesh(_mesh);
@@ -18,13 +22,38 @@ void MainWindow::showEdgeSelection(MyMesh* _mesh)
 
 void MainWindow::collapseEdge(MyMesh* _mesh, int edgeID)
 {
-    /* **** à compléter ! (Partie 1) ****
-     * cette fonction utilise l'opérateur collapse pour supprimer l'arête d'index edgeID
-     * Attention à ne pas oublier garbage_collection() !
-     */
+    _mesh->request_vertex_status();
+    _mesh->request_edge_status();
+    _mesh->request_face_status();
 
-    // permet de nettoyer le maillage et de garder la cohérence des indices après un collapse
-    _mesh->garbage_collection();
+    EdgeHandle currentEdge = _mesh->edge_handle(edgeID);
+    HalfedgeHandle heh0 =_mesh->halfedge_handle(currentEdge, 0);
+
+    VertexHandle v1,v2;
+
+    v1 = _mesh->from_vertex_handle(heh0);
+    v2 = _mesh->to_vertex_handle(heh0);
+
+    MyMesh::Point newVertex;
+
+    newVertex = _mesh->point(v1);
+    newVertex += _mesh->point(v2);
+    newVertex /= 2;
+
+    qDebug() << " test ";
+    for(MyMesh::HalfedgeIter it = _mesh->halfedges_begin(); it != _mesh->halfedges_end(); ++it) {
+      if( it->idx() == heh0.idx())
+      {
+        if(_mesh->is_collapse_ok(heh0)){
+            // Collapse edge
+            _mesh->collapse(*it);
+            _mesh->set_point(v2, newVertex);
+            // permet de nettoyer le maillage et de garder la cohérence des indices après un collapse
+            _mesh->garbage_collection();
+            break;
+        }
+      }
+    }
 }
 
 // fonction pratique pour faire des tirages aléatoires
@@ -38,17 +67,70 @@ void MainWindow::decimation(MyMesh* _mesh, int percent, QString method)
      * method  : la méthode à utiliser parmis : "Aléatoire", "Par taille", "Par angle", "Par planéité"
      */
 
+    int n_e = _mesh->n_edges();
+    int n_e_target = ((100-percent) * n_e)/100;
+    qDebug() << n_e << " by " << percent << " is :" << n_e_target;
+
+    int selectedEdgeId;
+
     if(method == "Aléatoire")
     {
-
+        while (n_e >= n_e_target) {
+            selectedEdgeId = randInt(0, n_e);
+            collapseEdge(_mesh, selectedEdgeId);
+            n_e = _mesh->n_edges();
+        }
     }
     else if(method == "Par taille")
     {
-
+        EdgeHandle currentEdge;
+        while (n_e >= n_e_target) {
+            selectedEdgeId = _mesh->edge_handle(0).idx();
+            for(MyMesh::EdgeIter  e_it = _mesh->edges_begin(); e_it != _mesh->edges_end(); e_it++){
+                currentEdge = *e_it;
+                if(_mesh->calc_edge_length(currentEdge) < _mesh->calc_edge_length(_mesh->edge_handle(selectedEdgeId)))
+                    selectedEdgeId = currentEdge.idx();
+            }
+            collapseEdge(_mesh, selectedEdgeId);
+            n_e = _mesh->n_edges();
+        }
     }
     else if(method == "Par angle")
     {
+        float selectedNorm;
 
+        EdgeHandle currentEdge;
+        HalfedgeHandle heh0, heh1;
+        FaceHandle fh0, fh1;
+        MyMesh::Normal n0, n1;
+        Vec3f cross_n0_n1;
+        float norm;
+        while (n_e >= n_e_target) {
+            selectedEdgeId = _mesh->edge_handle(0).idx();
+            selectedNorm = MAXFLOAT;
+            for(MyMesh::EdgeIter  e_it = _mesh->edges_begin(); e_it != _mesh->edges_end(); e_it++){
+                currentEdge = *e_it;
+
+                heh0 = _mesh->halfedge_handle(currentEdge,0);
+                heh1 = _mesh->opposite_halfedge_handle(heh1);
+                fh0 = _mesh->face_handle(heh0);
+                fh1 = _mesh->face_handle(heh1);
+                n0 = _mesh->calc_face_normal(fh0);
+                n1 = _mesh->calc_face_normal(fh1);
+
+                cross_n0_n1 = cross(n0,n1);
+                norm = sqrt(pow(cross_n0_n1[0],2) + pow(cross_n0_n1[1],2) + pow(cross_n0_n1[2],2));
+                if(norm > selectedNorm){
+                    qDebug() << " teddst ";
+                    selectedEdgeId = currentEdge.idx();
+                    selectedNorm = norm;
+                }
+            }
+            qDebug() << " tezzzddst ";
+
+            collapseEdge(_mesh, selectedEdgeId);
+            n_e = _mesh->n_edges();
+        }
     }
     else if(method == "Par planéité")
     {
