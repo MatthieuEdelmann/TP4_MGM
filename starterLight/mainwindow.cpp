@@ -40,24 +40,43 @@ void MainWindow::collapseEdge(MyMesh* _mesh, int edgeID)
     newVertex += _mesh->point(v2);
     newVertex /= 2;
 
-    qDebug() << " test ";
-    for(MyMesh::HalfedgeIter it = _mesh->halfedges_begin(); it != _mesh->halfedges_end(); ++it) {
-      if( it->idx() == heh0.idx())
-      {
-        if(_mesh->is_collapse_ok(heh0)){
-            // Collapse edge
-            _mesh->collapse(*it);
-            _mesh->set_point(v2, newVertex);
-            // permet de nettoyer le maillage et de garder la cohérence des indices après un collapse
-            _mesh->garbage_collection();
-            break;
-        }
-      }
+    if(_mesh->is_collapse_ok(heh0)){
+        // Collapse edge
+        _mesh->collapse(heh0);
+        _mesh->set_point(v2, newVertex);
+        // permet de nettoyer le maillage et de garder la cohérence des indices après un collapse
+        _mesh->garbage_collection();
+    } else{
+        qDebug() << "Not collapsable";
     }
 }
 
 // fonction pratique pour faire des tirages aléatoires
 int randInt(int low, int high){return qrand() % ((high + 1) - low) + low;}
+
+int planeiteVectex(MyMesh* _mesh, int vertexId){
+
+    int count = 0;
+    HalfedgeHandle heh0, heh1;
+    FaceHandle fh0, fh1;
+    Vec3f n0, n1;
+    float dot_n0_n1, angle = 0;
+    VertexHandle vh = _mesh->vertex_handle(vertexId);
+    for (MyMesh::VertexEdgeIter ve_it = _mesh->ve_iter(vh); ve_it.is_valid(); ++ve_it)
+    {
+        heh0 = _mesh->halfedge_handle(ve_it.handle(),0);
+        heh1 = _mesh->halfedge_handle(ve_it.handle(),1);
+        fh0 = _mesh->face_handle(heh0);
+        fh1 = _mesh->face_handle(heh1);
+        n0 = _mesh->calc_face_normal(fh0);
+        n1 = _mesh->calc_face_normal(fh1);
+
+        dot_n0_n1 = dot(n0,n1);
+        angle += acos(dot_n0_n1);
+        count++;
+    }
+    return angle/count;
+}
 
 void MainWindow::decimation(MyMesh* _mesh, int percent, QString method)
 {
@@ -67,9 +86,13 @@ void MainWindow::decimation(MyMesh* _mesh, int percent, QString method)
      * method  : la méthode à utiliser parmis : "Aléatoire", "Par taille", "Par angle", "Par planéité"
      */
 
+    _mesh->request_vertex_status();
+    _mesh->request_edge_status();
+    _mesh->request_face_status();
+
     int n_e = _mesh->n_edges();
     int n_e_target = ((100-percent) * n_e)/100;
-    qDebug() << n_e << " by " << percent << " is :" << n_e_target;
+    qDebug() << n_e << " by " << percent << "% is :" << n_e_target;
 
     int selectedEdgeId;
 
@@ -83,12 +106,16 @@ void MainWindow::decimation(MyMesh* _mesh, int percent, QString method)
     }
     else if(method == "Par taille")
     {
+        HalfedgeHandle heh0;
         EdgeHandle currentEdge;
+
         while (n_e >= n_e_target) {
             selectedEdgeId = _mesh->edge_handle(0).idx();
             for(MyMesh::EdgeIter  e_it = _mesh->edges_begin(); e_it != _mesh->edges_end(); e_it++){
                 currentEdge = *e_it;
-                if(_mesh->calc_edge_length(currentEdge) < _mesh->calc_edge_length(_mesh->edge_handle(selectedEdgeId)))
+                heh0 = _mesh->halfedge_handle(e_it,0);
+
+                if(_mesh->calc_edge_length(currentEdge) < _mesh->calc_edge_length(_mesh->edge_handle(selectedEdgeId)) && _mesh->is_collapse_ok(heh0))
                     selectedEdgeId = currentEdge.idx();
             }
             collapseEdge(_mesh, selectedEdgeId);
@@ -97,36 +124,31 @@ void MainWindow::decimation(MyMesh* _mesh, int percent, QString method)
     }
     else if(method == "Par angle")
     {
-        float selectedNorm;
 
-        EdgeHandle currentEdge;
+        float selectedAngle;
         HalfedgeHandle heh0, heh1;
         FaceHandle fh0, fh1;
-        MyMesh::Normal n0, n1;
-        Vec3f cross_n0_n1;
-        float norm;
+        Vec3f n0, n1;
+        float dot_n0_n1, angle;
         while (n_e >= n_e_target) {
-            selectedEdgeId = _mesh->edge_handle(0).idx();
-            selectedNorm = MAXFLOAT;
-            for(MyMesh::EdgeIter  e_it = _mesh->edges_begin(); e_it != _mesh->edges_end(); e_it++){
-                currentEdge = *e_it;
+            selectedEdgeId = _mesh->edges_sbegin()->idx();
+            selectedAngle = MAXFLOAT;
+            for(MyMesh::EdgeIter  e_it = _mesh->edges_sbegin(); e_it != _mesh->edges_end(); ++e_it){
 
-                heh0 = _mesh->halfedge_handle(currentEdge,0);
-                heh1 = _mesh->opposite_halfedge_handle(heh1);
+                heh0 = _mesh->halfedge_handle(e_it,0);
+                heh1 = _mesh->halfedge_handle(e_it,1);
                 fh0 = _mesh->face_handle(heh0);
                 fh1 = _mesh->face_handle(heh1);
                 n0 = _mesh->calc_face_normal(fh0);
                 n1 = _mesh->calc_face_normal(fh1);
 
-                cross_n0_n1 = cross(n0,n1);
-                norm = sqrt(pow(cross_n0_n1[0],2) + pow(cross_n0_n1[1],2) + pow(cross_n0_n1[2],2));
-                if(norm > selectedNorm){
-                    qDebug() << " teddst ";
-                    selectedEdgeId = currentEdge.idx();
-                    selectedNorm = norm;
+                dot_n0_n1 = dot(n0,n1);
+                angle = acos(dot_n0_n1);
+                if(angle < selectedAngle && _mesh->is_collapse_ok(heh0)){
+                    selectedEdgeId = e_it.handle().idx();
+                    selectedAngle = angle;
                 }
             }
-            qDebug() << " tezzzddst ";
 
             collapseEdge(_mesh, selectedEdgeId);
             n_e = _mesh->n_edges();
@@ -134,7 +156,50 @@ void MainWindow::decimation(MyMesh* _mesh, int percent, QString method)
     }
     else if(method == "Par planéité")
     {
+        float selectedAngle;
+        HalfedgeHandle heh0, heh1;
+        FaceHandle fh0, fh1;
+        Vec3f n0, n1;
+        float dot_n0_n1;
+        float angle;
+        while (n_e >= n_e_target) {
+            selectedEdgeId = _mesh->edges_sbegin()->idx();
+            selectedAngle = MAXFLOAT;
+            for(MyMesh::EdgeIter  e_it = _mesh->edges_sbegin(); e_it != _mesh->edges_end(); ++e_it){
 
+                heh0 = _mesh->halfedge_handle(e_it,0);
+                heh1 = _mesh->halfedge_handle(e_it,1);
+
+                angle = planeiteVectex(_mesh, _mesh->to_vertex_handle(heh0).idx());
+                angle += planeiteVectex(_mesh, _mesh->to_vertex_handle(heh1).idx());
+                angle /= 2;
+                if(angle < selectedAngle && _mesh->is_collapse_ok(heh0)){
+                    selectedEdgeId = e_it.handle().idx();
+                    selectedAngle = angle;
+                }
+            }
+
+            collapseEdge(_mesh, selectedEdgeId);
+            n_e = _mesh->n_edges();
+        }
+    }
+    else if(method == "Par taille sup")
+    {
+        HalfedgeHandle heh0;
+        EdgeHandle currentEdge;
+
+        while (n_e >= n_e_target) {
+            selectedEdgeId = _mesh->edge_handle(0).idx();
+            for(MyMesh::EdgeIter  e_it = _mesh->edges_begin(); e_it != _mesh->edges_end(); e_it++){
+                currentEdge = *e_it;
+                heh0 = _mesh->halfedge_handle(e_it,0);
+
+                if(_mesh->calc_edge_length(currentEdge) < _mesh->calc_edge_length(_mesh->edge_handle(selectedEdgeId)) && _mesh->is_collapse_ok(heh0))
+                    selectedEdgeId = currentEdge.idx();
+            }
+            collapseEdge(_mesh, selectedEdgeId);
+            n_e = _mesh->n_edges();
+        }
     }
     else
     {
